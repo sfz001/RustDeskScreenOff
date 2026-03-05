@@ -55,6 +55,45 @@ class ScreenController {
         }
     }
 
+    // MARK: Resolution
+
+    private var savedMode: CGDisplayMode?
+    private let targetWidth = 1512
+    private let targetHeight = 982
+
+    func switchResolution() {
+        let main = CGMainDisplayID()
+        savedMode = CGDisplayCopyDisplayMode(main)
+
+        let options = [kCGDisplayShowDuplicateLowResolutionModes: kCFBooleanTrue] as CFDictionary
+        guard let modes = CGDisplayCopyAllDisplayModes(main, options) as? [CGDisplayMode] else { return }
+
+        let target = modes.first {
+            $0.width == targetWidth && $0.height == targetHeight && $0.pixelWidth > $0.width
+        }
+        guard let mode = target else {
+            NSLog("Resolution mode \(targetWidth)x\(targetHeight) HiDPI not found, skipping")
+            return
+        }
+
+        let err = CGDisplaySetDisplayMode(main, mode, nil)
+        if err == .success {
+            NSLog("Resolution switched to \(targetWidth)x\(targetHeight) HiDPI")
+        }
+    }
+
+    func restoreResolution() {
+        guard let mode = savedMode else { return }
+        let main = CGMainDisplayID()
+        let err = CGDisplaySetDisplayMode(main, mode, nil)
+        if err == .success {
+            NSLog("Resolution restored to \(mode.width)x\(mode.height)")
+        }
+        savedMode = nil
+    }
+
+    // MARK: Gamma Black
+
     func setBlack() {
         guard !isBlack else { return }
         var displays = [CGDirectDisplayID](repeating: 0, count: 16)
@@ -108,6 +147,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         stopPollTimer()
         screenCtl.restore()
+        screenCtl.restoreResolution()
         screenCtl.disableMirroring()
     }
 
@@ -175,11 +215,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if connected && !screenCtl.isScreenBlack {
             NSLog("[POLL] RustDesk connection active — activating screen off")
             screenCtl.enableMirroring()
+            screenCtl.switchResolution()
             screenCtl.setBlack()
             updateStatus()
         } else if !connected && screenCtl.isScreenBlack {
             NSLog("[POLL] No active RustDesk connection — restoring screen")
             screenCtl.restore()
+            screenCtl.restoreResolution()
             screenCtl.disableMirroring()
             screenCtl.lockScreen()
             updateStatus()
