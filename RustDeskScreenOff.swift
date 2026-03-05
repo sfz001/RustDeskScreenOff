@@ -6,6 +6,58 @@ import Foundation
 
 class ScreenController {
     private var isBlack = false
+    private var mirroredDisplays: [CGDirectDisplayID] = []
+
+    // MARK: Display Mirroring
+
+    func enableMirroring() {
+        var displays = [CGDirectDisplayID](repeating: 0, count: 16)
+        var count: UInt32 = 0
+        CGGetOnlineDisplayList(16, &displays, &count)
+
+        let main = CGMainDisplayID()
+        guard count > 1 else { return }
+
+        var config: CGDisplayConfigRef?
+        CGBeginDisplayConfiguration(&config)
+
+        var mirrored: [CGDirectDisplayID] = []
+        for i in 0..<Int(count) {
+            let d = displays[i]
+            if d != main && CGDisplayMirrorsDisplay(d) == kCGNullDirectDisplay {
+                CGConfigureDisplayMirrorOfDisplay(config, d, main)
+                mirrored.append(d)
+            }
+        }
+
+        if mirrored.isEmpty {
+            CGCancelDisplayConfiguration(config)
+            return
+        }
+
+        let err = CGCompleteDisplayConfiguration(config, .forSession)
+        if err == .success {
+            mirroredDisplays = mirrored
+            NSLog("Mirroring enabled for \(mirrored.count) display(s)")
+        }
+    }
+
+    func disableMirroring() {
+        guard !mirroredDisplays.isEmpty else { return }
+
+        var config: CGDisplayConfigRef?
+        CGBeginDisplayConfiguration(&config)
+        for d in mirroredDisplays {
+            CGConfigureDisplayMirrorOfDisplay(config, d, kCGNullDirectDisplay)
+        }
+        let err = CGCompleteDisplayConfiguration(config, .forSession)
+        if err == .success {
+            NSLog("Mirroring disabled, restored \(mirroredDisplays.count) display(s)")
+            mirroredDisplays = []
+        }
+    }
+
+    // MARK: Gamma Black
 
     func setBlack() {
         guard !isBlack else { return }
@@ -138,6 +190,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationWillTerminate(_ notification: Notification) {
         logMonitor.stop()
         screenCtl.restore()
+        screenCtl.disableMirroring()
         stopSafetyTimer()
     }
 
@@ -188,7 +241,8 @@ class AppDelegate: NSObject, NSApplicationDelegate {
     private func handleConnectionOpened() {
         guard canAct() else { return }
 
-        NSLog("RustDesk connection detected — setting screen to black")
+        NSLog("RustDesk connection detected — mirroring + setting screen to black")
+        screenCtl.enableMirroring()
         screenCtl.setBlack()
         startSafetyTimer()
         updateStatus()
@@ -201,6 +255,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         NSLog("RustDesk disconnected — restoring screen + locking")
         stopSafetyTimer()
         screenCtl.restore()
+        screenCtl.disableMirroring()
         screenCtl.lockScreen()
         updateStatus()
     }
@@ -247,6 +302,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         if task.terminationStatus != 0 {
             NSLog("[TIMER] No active RustDesk connection, restoring screen")
             screenCtl.restore()
+            screenCtl.disableMirroring()
             screenCtl.lockScreen()
             stopSafetyTimer()
             updateStatus()

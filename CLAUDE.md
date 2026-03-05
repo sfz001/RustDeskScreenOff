@@ -19,7 +19,7 @@ Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). F
 
 Everything lives in `RustDeskScreenOff.swift` (~300 lines), structured as three classes + main entry:
 
-- **`ScreenController`** — Blacks out all displays via `CGSetDisplayTransferByFormula` (gamma curves set to zero). Restores with `CGDisplayRestoreColorSyncSettings`. Locks screen via `open -a ScreenSaverEngine`. The gamma change is invisible to ScreenCaptureKit, so remote viewers still see the normal desktop.
+- **`ScreenController`** — Blacks out all displays via `CGSetDisplayTransferByFormula` (gamma curves set to zero). Restores with `CGDisplayRestoreColorSyncSettings`. Locks screen via `open -a ScreenSaverEngine`. The gamma change is invisible to ScreenCaptureKit, so remote viewers still see the normal desktop. Also handles multi-monitor mirroring via `CGConfigureDisplayMirrorOfDisplay` — merges all displays into one on connect, restores on disconnect.
 
 - **`LogMonitor`** — Runs `tail -n 0 -F` on two RustDesk log files (`~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` and `.../server/RustDesk_rCURRENT.log`). Parses lines for `"Connection opened from"` and `"Connection closed"`, fires callbacks on main thread.
 

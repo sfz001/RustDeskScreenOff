@@ -7,7 +7,8 @@ RustDesk 远程连接自动熄屏工具，保护你的隐私。
 ### 功能
 
 - 当有人通过 RustDesk 远程连接到你的 Mac 时，本地屏幕自动变黑，防止旁人看到远程操作内容
-- 远程连接断开后，屏幕自动恢复并锁屏
+- 多显示器自动镜像：连接时自动将多个屏幕合并为一个，远程端只看到一个屏幕，避免窗口分散混乱
+- 远程连接断开后，屏幕自动恢复（包括恢复多屏布局）并锁屏
 - 远程端画面不受影响，正常显示桌面
 - 菜单栏显示当前状态（监控中 / 已熄屏）
 - 开机自动启动，无需手动操作
@@ -37,7 +38,8 @@ Auto screen-off tool for RustDesk remote connections. Protects your privacy.
 ### Features
 
 - Automatically blacks out the local screen when someone connects to your Mac via RustDesk, preventing bystanders from seeing remote activity
-- Restores the screen and locks it when the remote connection ends
+- Auto display mirroring: merges multiple monitors into one when connected, so the remote viewer sees a single clean screen instead of a scattered multi-monitor layout
+- Restores the screen and multi-monitor layout when the remote connection ends, then locks the screen
 - The remote viewer's display is unaffected — they see the desktop normally
 - Menu bar icon shows current status (monitoring / screen off)
 - Launches automatically at login, no manual action needed
