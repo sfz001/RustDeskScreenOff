@@ -8,8 +8,6 @@ class ScreenController {
     private var isBlack = false
     private var mirroredDisplays: [CGDirectDisplayID] = []
 
-    // MARK: Display Mirroring
-
     func enableMirroring() {
         var displays = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
@@ -57,18 +55,13 @@ class ScreenController {
         }
     }
 
-    // MARK: Gamma Black
-
     func setBlack() {
         guard !isBlack else { return }
         var displays = [CGDirectDisplayID](repeating: 0, count: 16)
         var count: UInt32 = 0
         CGGetOnlineDisplayList(16, &displays, &count)
         for i in 0..<Int(count) {
-            CGSetDisplayTransferByFormula(displays[i],
-                0, 0, 1,
-                0, 0, 1,
-                0, 0, 1)
+            CGSetDisplayTransferByFormula(displays[i], 0, 0, 1, 0, 0, 1, 0, 0, 1)
         }
         isBlack = true
     }
@@ -89,109 +82,33 @@ class ScreenController {
     var isScreenBlack: Bool { isBlack }
 }
 
-// MARK: - Log Monitor
-
-class LogMonitor {
-    var onConnectionOpened: (() -> Void)?
-    var onConnectionClosed: (() -> Void)?
-
-    private var tailProcess: Process?
-    private let queue = DispatchQueue(label: "log-monitor", qos: .background)
-
-    func start() {
-        queue.async { [weak self] in
-            self?.runTail()
-        }
-    }
-
-    func stop() {
-        tailProcess?.terminate()
-        tailProcess = nil
-    }
-
-    private func runTail() {
-        let home = FileManager.default.homeDirectoryForCurrentUser.path
-        let log1 = "\(home)/Library/Logs/RustDesk/RustDesk_rCURRENT.log"
-        let log2 = "\(home)/Library/Logs/RustDesk/server/RustDesk_rCURRENT.log"
-
-        let process = Process()
-        process.executableURL = URL(fileURLWithPath: "/usr/bin/tail")
-        process.arguments = ["-n", "0", "-F", log1, log2]
-
-        let pipe = Pipe()
-        process.standardOutput = pipe
-        process.standardError = FileHandle.nullDevice
-
-        tailProcess = process
-
-        do {
-            try process.run()
-        } catch {
-            NSLog("Failed to start tail: \(error)")
-            return
-        }
-
-        let handle = pipe.fileHandleForReading
-        var buffer = Data()
-
-        while process.isRunning {
-            let data = handle.availableData
-            if data.isEmpty {
-                Thread.sleep(forTimeInterval: 0.1)
-                continue
-            }
-            buffer.append(data)
-
-            while let range = buffer.range(of: Data("\n".utf8)) {
-                let lineData = buffer.subdata(in: buffer.startIndex..<range.lowerBound)
-                buffer.removeSubrange(buffer.startIndex...range.lowerBound)
-
-                if let line = String(data: lineData, encoding: .utf8) {
-                    if line.contains("Connection opened from") {
-                        DispatchQueue.main.async { self.onConnectionOpened?() }
-                    } else if line.contains("Connection closed") {
-                        DispatchQueue.main.async { self.onConnectionClosed?() }
-                    }
-                }
-            }
-        }
-    }
-}
-
 // MARK: - App Delegate
 
 class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem!
     private var statusMenu: NSMenu!
     private var statusMenuItem: NSMenuItem!
-    private var autoLaunchMenuItem: NSMenuItem!
 
     private let screenCtl = ScreenController()
-    private let logMonitor = LogMonitor()
-    private var safetyTimer: DispatchSourceTimer?
-    private var debounceTime: Date = .distantPast
+    private var pollTimer: DispatchSourceTimer?
 
     private let launchAgentLabel = "com.rustdesk.screen-off"
     private var launchAgentPath: String {
         let home = FileManager.default.homeDirectoryForCurrentUser.path
         return "\(home)/Library/LaunchAgents/\(launchAgentLabel).plist"
     }
-    private var appPath: String {
-        Bundle.main.bundlePath
-    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         setupStatusBar()
-        setupLogMonitor()
         installAutoLaunch()
-        updateStatus()
+        pollConnectionState()
+        startPollTimer()
     }
 
     func applicationWillTerminate(_ notification: Notification) {
-        logMonitor.stop()
+        stopPollTimer()
         screenCtl.restore()
         screenCtl.disableMirroring()
-        stopSafetyTimer()
     }
 
     // MARK: - Status Bar
@@ -202,14 +119,13 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
         statusMenu = NSMenu()
 
-        statusMenuItem = NSMenuItem(title: "Monitoring", action: #selector(noop), keyEquivalent: "")
-        statusMenuItem.target = self
+        statusMenuItem = NSMenuItem(title: "Monitoring", action: nil, keyEquivalent: "")
         statusMenu.addItem(statusMenuItem)
 
-        autoLaunchMenuItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
-        autoLaunchMenuItem.state = .on
-        autoLaunchMenuItem.isEnabled = false
-        statusMenu.addItem(autoLaunchMenuItem)
+        let autoLaunchItem = NSMenuItem(title: "Launch at Login", action: nil, keyEquivalent: "")
+        autoLaunchItem.state = .on
+        autoLaunchItem.isEnabled = false
+        statusMenu.addItem(autoLaunchItem)
 
         statusMenu.addItem(.separator())
 
@@ -224,87 +140,48 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         statusItem.menu = statusMenu
     }
 
-    // MARK: - Log Monitor
+    // MARK: - Connection Detection (1s process poll)
 
-    private func setupLogMonitor() {
-        logMonitor.onConnectionOpened = { [weak self] in
-            self?.handleConnectionOpened()
-        }
-        logMonitor.onConnectionClosed = { [weak self] in
-            self?.handleConnectionClosed()
-        }
-        logMonitor.start()
-    }
-
-    // MARK: - Connection Handling
-
-    private func handleConnectionOpened() {
-        guard canAct() else { return }
-
-        NSLog("RustDesk connection detected — mirroring + setting screen to black")
-        screenCtl.enableMirroring()
-        screenCtl.setBlack()
-        startSafetyTimer()
-        updateStatus()
-    }
-
-    private func handleConnectionClosed() {
-        guard screenCtl.isScreenBlack else { return }
-        guard canAct() else { return }
-
-        NSLog("RustDesk disconnected — restoring screen + locking")
-        stopSafetyTimer()
-        screenCtl.restore()
-        screenCtl.disableMirroring()
-        screenCtl.lockScreen()
-        updateStatus()
-    }
-
-    private func canAct() -> Bool {
-        let now = Date()
-        guard now.timeIntervalSince(debounceTime) >= 3 else { return false }
-        debounceTime = now
-        return true
-    }
-
-    // MARK: - Safety Timer
-
-    private func startSafetyTimer() {
-        stopSafetyTimer()
+    private func startPollTimer() {
+        stopPollTimer()
         let timer = DispatchSource.makeTimerSource(queue: .main)
-        timer.schedule(deadline: .now() + 300, repeating: 300)
+        timer.schedule(deadline: .now() + 1, repeating: 1)
         timer.setEventHandler { [weak self] in
-            self?.checkSafety()
+            self?.pollConnectionState()
         }
         timer.resume()
-        safetyTimer = timer
+        pollTimer = timer
     }
 
-    private func stopSafetyTimer() {
-        safetyTimer?.cancel()
-        safetyTimer = nil
+    private func stopPollTimer() {
+        pollTimer?.cancel()
+        pollTimer = nil
     }
 
-    private func checkSafety() {
-        guard screenCtl.isScreenBlack else {
-            stopSafetyTimer()
-            return
-        }
-
+    private func isRustDeskConnected() -> Bool {
         let task = Process()
         task.executableURL = URL(fileURLWithPath: "/usr/bin/pgrep")
-        task.arguments = ["-f", "rustdesk.*--cm"]
+        task.arguments = ["-fi", "rustdesk.*--cm"]
         task.standardOutput = FileHandle.nullDevice
         task.standardError = FileHandle.nullDevice
         try? task.run()
         task.waitUntilExit()
+        return task.terminationStatus == 0
+    }
 
-        if task.terminationStatus != 0 {
-            NSLog("[TIMER] No active RustDesk connection, restoring screen")
+    private func pollConnectionState() {
+        let connected = isRustDeskConnected()
+
+        if connected && !screenCtl.isScreenBlack {
+            NSLog("[POLL] RustDesk connection active — activating screen off")
+            screenCtl.enableMirroring()
+            screenCtl.setBlack()
+            updateStatus()
+        } else if !connected && screenCtl.isScreenBlack {
+            NSLog("[POLL] No active RustDesk connection — restoring screen")
             screenCtl.restore()
             screenCtl.disableMirroring()
             screenCtl.lockScreen()
-            stopSafetyTimer()
             updateStatus()
         }
     }
@@ -325,28 +202,21 @@ class AppDelegate: NSObject, NSApplicationDelegate {
 
     // MARK: - Actions
 
-    @objc private func noop() {}
-
     @objc private func quitApp() {
         NSApplication.shared.terminate(nil)
     }
 
     // MARK: - Auto Launch
 
-    private func isAutoLaunchEnabled() -> Bool {
-        FileManager.default.fileExists(atPath: launchAgentPath)
-    }
-
     private func installAutoLaunch() {
         let plist: [String: Any] = [
             "Label": launchAgentLabel,
-            "ProgramArguments": ["/usr/bin/open", "-a", appPath],
+            "ProgramArguments": ["/usr/bin/open", "-a", Bundle.main.bundlePath],
             "RunAtLoad": true,
         ]
         let data = try? PropertyListSerialization.data(fromPropertyList: plist, format: .xml, options: 0)
         try? data?.write(to: URL(fileURLWithPath: launchAgentPath))
     }
-
 }
 
 // MARK: - Main

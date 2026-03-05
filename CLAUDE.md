@@ -17,13 +17,11 @@ Build requires macOS 14.0+ SDK. Uses `swiftc` directly (no Xcode project/SPM). F
 
 ## Architecture
 
-Everything lives in `RustDeskScreenOff.swift` (~300 lines), structured as three classes + main entry:
+Everything lives in `RustDeskScreenOff.swift` (~200 lines), structured as two classes + main entry:
 
-- **`ScreenController`** — Blacks out all displays via `CGSetDisplayTransferByFormula` (gamma curves set to zero). Restores with `CGDisplayRestoreColorSyncSettings`. Locks screen via `open -a ScreenSaverEngine`. The gamma change is invisible to ScreenCaptureKit, so remote viewers still see the normal desktop. Also handles multi-monitor mirroring via `CGConfigureDisplayMirrorOfDisplay` — merges all displays into one on connect, restores on disconnect.
+- **`ScreenController`** — Screen blackout via `CGSetDisplayTransferByFormula` (gamma to zero), restore via `CGDisplayRestoreColorSyncSettings`, lock via `open -a ScreenSaverEngine`. Multi-monitor mirroring via `CGConfigureDisplayMirrorOfDisplay` (merge on connect, restore on disconnect). Gamma is invisible to ScreenCaptureKit so remote viewers see normal desktop.
 
-- **`LogMonitor`** — Runs `tail -n 0 -F` on two RustDesk log files (`~/Library/Logs/RustDesk/RustDesk_rCURRENT.log` and `.../server/RustDesk_rCURRENT.log`). Parses lines for `"Connection opened from"` and `"Connection closed"`, fires callbacks on main thread.
-
-- **`AppDelegate`** — Orchestrates everything. Manages NSStatusItem menu bar UI, wires LogMonitor callbacks to ScreenController, runs a 5-minute safety timer (`pgrep -f "rustdesk.*--cm"`) as fallback if log events are missed. Installs LaunchAgent plist (`com.rustdesk.screen-off`) for login auto-start. Has a 3-second debounce on connection events.
+- **`AppDelegate`** — Orchestrates everything. Every 1 second polls `pgrep -fi "rustdesk.*--cm"` to detect active connections. On connect: enable mirroring → black screen. On disconnect: restore screen → disable mirroring → lock. Manages NSStatusItem menu bar UI. Installs LaunchAgent plist for login auto-start.
 
 - **Main entry** — Creates `NSApplication`, sets delegate, calls `app.run()` (no storyboard/NIB).
 
