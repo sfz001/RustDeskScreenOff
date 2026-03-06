@@ -92,6 +92,75 @@ class ScreenController {
         savedMode = nil
     }
 
+    // MARK: Dock
+
+    private var savedDockOrientation: String?
+    private var savedDockAutohide: Bool?
+
+    func saveDockAndSetLeft() {
+        // Save current orientation
+        let orientTask = Process()
+        orientTask.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        orientTask.arguments = ["read", "com.apple.dock", "orientation"]
+        let orientPipe = Pipe()
+        orientTask.standardOutput = orientPipe
+        orientTask.standardError = FileHandle.nullDevice
+        try? orientTask.run()
+        orientTask.waitUntilExit()
+        let orientData = orientPipe.fileHandleForReading.readDataToEndOfFile()
+        savedDockOrientation = String(data: orientData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines)
+        if savedDockOrientation?.isEmpty ?? true { savedDockOrientation = "bottom" }
+
+        // Save current autohide
+        let hideTask = Process()
+        hideTask.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        hideTask.arguments = ["read", "com.apple.dock", "autohide"]
+        let hidePipe = Pipe()
+        hideTask.standardOutput = hidePipe
+        hideTask.standardError = FileHandle.nullDevice
+        try? hideTask.run()
+        hideTask.waitUntilExit()
+        let hideData = hidePipe.fileHandleForReading.readDataToEndOfFile()
+        let hideStr = String(data: hideData, encoding: .utf8)?.trimmingCharacters(in: .whitespacesAndNewlines) ?? "0"
+        savedDockAutohide = (hideStr == "1")
+
+        // Set dock to left, no autohide
+        runDefaults(["write", "com.apple.dock", "orientation", "-string", "left"])
+        runDefaults(["write", "com.apple.dock", "autohide", "-bool", "false"])
+        restartDock()
+        NSLog("Dock set to left, autohide off (was: \(savedDockOrientation ?? "?"), autohide: \(savedDockAutohide == true))")
+    }
+
+    func restoreDock() {
+        guard let orientation = savedDockOrientation, let autohide = savedDockAutohide else { return }
+        runDefaults(["write", "com.apple.dock", "orientation", "-string", orientation])
+        runDefaults(["write", "com.apple.dock", "autohide", "-bool", autohide ? "true" : "false"])
+        restartDock()
+        NSLog("Dock restored to \(orientation), autohide: \(autohide)")
+        savedDockOrientation = nil
+        savedDockAutohide = nil
+    }
+
+    private func runDefaults(_ args: [String]) {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/defaults")
+        task.arguments = args
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+    }
+
+    private func restartDock() {
+        let task = Process()
+        task.executableURL = URL(fileURLWithPath: "/usr/bin/killall")
+        task.arguments = ["Dock"]
+        task.standardOutput = FileHandle.nullDevice
+        task.standardError = FileHandle.nullDevice
+        try? task.run()
+        task.waitUntilExit()
+    }
+
     // MARK: Gamma Black
 
     func setBlack() {
@@ -148,6 +217,7 @@ class AppDelegate: NSObject, NSApplicationDelegate {
         stopPollTimer()
         screenCtl.restore()
         screenCtl.restoreResolution()
+        screenCtl.restoreDock()
         screenCtl.disableMirroring()
     }
 
@@ -216,12 +286,14 @@ class AppDelegate: NSObject, NSApplicationDelegate {
             NSLog("[POLL] RustDesk connection active — activating screen off")
             screenCtl.enableMirroring()
             screenCtl.switchResolution()
+            screenCtl.saveDockAndSetLeft()
             screenCtl.setBlack()
             updateStatus()
         } else if !connected && screenCtl.isScreenBlack {
             NSLog("[POLL] No active RustDesk connection — restoring screen")
             screenCtl.restore()
             screenCtl.restoreResolution()
+            screenCtl.restoreDock()
             screenCtl.disableMirroring()
             screenCtl.lockScreen()
             updateStatus()
